@@ -651,8 +651,8 @@ bool LoadContent()
 		return false;
 	}
 
-	d3dVertexShader = LoadShader<ID3D11VertexShader>(L"", "SimpleVertexShader", "latest");
-	d3dPixelShader = LoadShader<ID3D11PixelShader>(L"", "SimplePixelShader", "latest");
+	d3dVertexShader = LoadShader<ID3D11VertexShader>(L"", "main", "latest");
+	d3dPixelShader = LoadShader<ID3D11PixelShader>(L"", "main", "latest");
 
 	// Setup the projection matrix.
 	RECT clientRectangle;
