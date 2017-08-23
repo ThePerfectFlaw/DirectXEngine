@@ -88,10 +88,19 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
 template< class ShaderClass >
 ShaderClass* LoadShader(const std::wstring& fileName, const std::string& entryPoint, const std::string& profile);
 
+template<class ShaderClass>
+std::string GetLatestProfile();
+
+template<class ShaderClass>
+ShaderClass* CreateShader(ID3DBlob* shaderBlob, ID3D11ClassLinkage* classLinkage);
+
 bool LoadContent();
 void UnloadContent();
 
 void Update(float deltaTime);
+void Clear(const FLOAT clearColour[4], FLOAT clearDepth, UINT8 clearStencil);
+
+void Present(BOOL vSync);
 void Render();
 void Cleanup();
 DXGI_RATIONAL QueryRefreshRate(UINT screenWidth, UINT screenHeight, BOOL vsync);
@@ -438,4 +447,260 @@ int InitialiseDirectX(HINSTANCE hInstance, BOOL vSync)
 	Viewport.MaxDepth = 1.0f;
 
 	return 0;
+}
+
+template<>
+std::string GetLatestProfile<ID3D11VertexShader>()
+{
+	assert(d3dDevice);
+
+	D3D_FEATURE_LEVEL featureLevel = d3dDevice->GetFeatureLevel();
+
+	switch (featureLevel)
+	{
+		case D3D_FEATURE_LEVEL_11_1:
+		case D3D_FEATURE_LEVEL_11_0:
+			return "vs_5_0";
+			break;
+
+		case D3D_FEATURE_LEVEL_10_1:
+			return "vs_4_1";
+			break;
+
+		case D3D_FEATURE_LEVEL_10_0:
+			return "vs_4_0";
+			break;
+
+		case D3D_FEATURE_LEVEL_9_3:
+			return "vs_4_0_level_9_3";
+			break;
+
+		case D3D_FEATURE_LEVEL_9_2:
+		case D3D_FEATURE_LEVEL_9_1:
+			return "vs_4_0_level_9_1";
+			break;
+	}
+
+	return "";
+}
+
+template<>
+std::string GetLatestProfile<ID3D11PixelShader>()
+{
+	assert(d3dDevice);
+
+	D3D_FEATURE_LEVEL featureLevel = d3dDevice->GetFeatureLevel();
+
+	switch (featureLevel)
+	{
+		case D3D_FEATURE_LEVEL_11_1:
+		case D3D_FEATURE_LEVEL_11_0:
+			return "ps_5_0";
+			break;
+
+		case D3D_FEATURE_LEVEL_10_1:
+			return "ps_4_1";
+			break;
+
+		case D3D_FEATURE_LEVEL_10_0:
+			return "ps_4_0";
+			break;
+
+		case D3D_FEATURE_LEVEL_9_3:
+			return "ps_4_0_level_9_3";
+			break;
+
+		case D3D_FEATURE_LEVEL_9_2:
+		case D3D_FEATURE_LEVEL_9_1:
+			return "ps_4_0_level_9_1";
+			break;
+	}
+
+	return "";
+}
+
+template<>
+ID3D11VertexShader* CreateShader<ID3D11VertexShader>(ID3DBlob* shaderBlob, ID3D11ClassLinkage* classLinkage)
+{
+	assert(d3dDevice);
+	assert(shaderBlob);
+
+	ID3D11VertexShader* vertexShader = nullptr;
+	d3dDevice->CreateVertexShader(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(), classLinkage, &vertexShader);
+
+	return vertexShader;
+}
+
+template<>
+ID3D11PixelShader* CreateShader<ID3D11PixelShader>(ID3DBlob* shaderBlob, ID3D11ClassLinkage* classLinkage)
+{
+	assert(d3dDevice);
+	assert(shaderBlob);
+
+	ID3D11PixelShader* pixelShader = nullptr;
+	d3dDevice->CreatePixelShader(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(), classLinkage, &pixelShader);
+
+	return pixelShader;
+}
+
+template<class ShaderClass>
+ShaderClass* LoadShader(const std::wstring& fileName, const std::string& entryPoint, const std::string& profile)
+{
+	ID3DBlob* shaderBlob = nullptr;
+	ID3DBlob* errorBlob = nullptr;
+
+	ShaderClass* shader = nullptr;
+
+	std::string prof = profile;
+
+	if (prof == "latest")
+	{
+		prof = GetLatestProfile<ShaderClass>();
+	}
+
+	UINT flags = D3DCOMPILE_ENABLE_STRICTNESS;
+
+#if _DEBUG
+	flags |= D3DCOMPILE_DEBUG;
+#endif
+
+	HRESULT result = D3DCompileFromFile(fileName.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, entryPoint.c_str(), prof.c_str(), flags, 0, &shaderBlob, &errorBlob);
+
+	if (FAILED(result))
+	{
+		if (errorBlob)
+		{
+			std::string errorMessage = (char*)errorBlob->GetBufferPointer();
+			OutputDebugStringA(errorMessage.c_str());
+
+			SafeRelease(shaderBlob);
+			SafeRelease(errorBlob);
+		}
+
+		return false;
+	}
+
+	shader = CreateShader<ShaderClass>(shaderBlob, nullptr);
+
+	SafeRelease(shaderBlob);
+	SafeRelease(errorBlob);
+
+	return shader;
+}
+
+bool LoadContent()
+{
+	assert(d3dDevice);
+
+	D3D11_BUFFER_DESC vertexBufferDescription;
+	ZeroMemory(&vertexBufferDescription, sizeof(D3D11_BUFFER_DESC));
+
+	vertexBufferDescription.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+	vertexBufferDescription.ByteWidth = sizeof(FVertexColour) * _countof(vertices);
+	vertexBufferDescription.CPUAccessFlags = 0;
+	vertexBufferDescription.Usage = D3D11_USAGE_DEFAULT;
+
+	D3D11_SUBRESOURCE_DATA resourceData;
+	ZeroMemory(&resourceData, sizeof(D3D11_SUBRESOURCE_DATA));
+
+	resourceData.pSysMem = vertices;
+
+	HRESULT result = d3dDevice->CreateBuffer(&vertexBufferDescription, &resourceData, &d3dVertexBuffer);
+	if (FAILED(result))
+	{
+		return false;
+	}
+
+	// Create and initialize the index buffer.
+	D3D11_BUFFER_DESC indexBufferDescription;
+	ZeroMemory(&indexBufferDescription, sizeof(D3D11_BUFFER_DESC));
+
+	indexBufferDescription.BindFlags = D3D11_BIND_INDEX_BUFFER;
+	indexBufferDescription.ByteWidth = sizeof(WORD) * _countof(indicies);
+	indexBufferDescription.CPUAccessFlags = 0;
+	indexBufferDescription.Usage = D3D11_USAGE_DEFAULT;
+	resourceData.pSysMem = indicies;
+
+	result = d3dDevice->CreateBuffer(&indexBufferDescription, &resourceData, &d3dIndexBuffer);
+	if (FAILED(result))
+	{
+		return false;
+	}
+
+	D3D11_BUFFER_DESC constantBufferDescription;
+	ZeroMemory(&constantBufferDescription, sizeof(D3D11_BUFFER_DESC));
+
+	constantBufferDescription.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+	constantBufferDescription.ByteWidth = sizeof(XMMATRIX);
+	constantBufferDescription.CPUAccessFlags = 0;
+	constantBufferDescription.Usage = D3D11_USAGE_DEFAULT;
+
+	result = d3dDevice->CreateBuffer(&constantBufferDescription, nullptr, &d3DConstantBuffers[CB_Application]);
+	if (FAILED(result))
+	{
+		return false;
+	}
+	result = d3dDevice->CreateBuffer(&constantBufferDescription, nullptr, &d3DConstantBuffers[CB_Frame]);
+	if (FAILED(result))
+	{
+		return false;
+	}
+	result = d3dDevice->CreateBuffer(&constantBufferDescription, nullptr, &d3DConstantBuffers[CB_Object]);
+	if (FAILED(result))
+	{
+		return false;
+	}
+
+	d3dVertexShader = LoadShader<ID3D11VertexShader>(L"", "SimpleVertexShader", "latest");
+	d3dPixelShader = LoadShader<ID3D11PixelShader>(L"", "SimplePixelShader", "latest");
+
+	// Setup the projection matrix.
+	RECT clientRectangle;
+	GetClientRect(windowHandle, &clientRectangle);
+
+	// Compute the exact client dimensions.
+	// This is required for a correct projection matrix.
+	float clientWidth = static_cast<float>(clientRectangle.right - clientRectangle.left);
+	float clientHeight = static_cast<float>(clientRectangle.bottom - clientRectangle.top);
+
+	projectionMatrix = XMMatrixPerspectiveFovLH(XMConvertToRadians(45.0f), clientWidth / clientHeight, 0.1f, 100.0f);
+
+	d3dDeviceContext->UpdateSubresource(d3DConstantBuffers[CB_Application], 0, nullptr, &projectionMatrix, 0, 0);
+
+	return true;
+}
+
+void Update(float deltaTime)
+{
+	XMVECTOR eyePosition = XMVectorSet(0, 0, -10, 1);
+	XMVECTOR focusPoint = XMVectorSet(0, 0, 0, 1);
+	XMVECTOR upDirection = XMVectorSet(0, 1, 0, 0);
+	viewMatrix = XMMatrixLookAtLH(eyePosition, focusPoint, upDirection);
+	d3dDeviceContext->UpdateSubresource(d3DConstantBuffers[CB_Frame], 0, nullptr, &viewMatrix, 0, 0);
+
+
+	static float angle = 0.0f;
+	angle += 90.0f * deltaTime;
+	XMVECTOR rotationAxis = XMVectorSet(0, 1, 1, 0);
+
+	worldMatrix = XMMatrixRotationAxis(rotationAxis, XMConvertToRadians(angle));
+	d3dDeviceContext->UpdateSubresource(d3DConstantBuffers[CB_Object], 0, nullptr, &worldMatrix, 0, 0);
+}
+
+void Clear(const FLOAT clearColour[4], FLOAT clearDepth, UINT8 clearStencil)
+{
+	d3dDeviceContext->ClearRenderTargetView(d3dRenderTargetView, clearColour);
+	d3dDeviceContext->ClearDepthStencilView(d3dDepthStencilView, D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, clearDepth, clearStencil);
+}
+
+void Present(BOOL vSync)
+{
+	if (vSync)
+	{
+		d3dSwapChain->Present(1, 0);
+	}
+	else
+	{
+		d3dSwapChain->Present(0, 0);
+	}
 }
